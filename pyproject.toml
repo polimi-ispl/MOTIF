@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motif-poi"
+version = "0.1.0"
+description = "MOTIF: Person-of-Interest Deepfake Detection Beyond 3DMM Coefficients"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Giovanni Affatato" }]
+keywords = ["deepfake-detection", "face-forensics", "person-of-interest", "facial-dynamics"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.8",
+    "torchvision>=0.23",
+    "av>=15.0",
+    "timm>=1.0",
+    "numpy>=2.0",
+    "scikit-learn>=1.7",
+    "huggingface_hub>=0.30",
+]
+
+[project.scripts]
+motif = "motif.cli:main"
+
+[project.urls]
+Repository = "https://github.com/polimi-ispl/MOTIF"
+Weights = "https://huggingface.co/heyGio/MOTIF"
+
+[tool.setuptools.packages.find]
+include = ["motif*"]
+
+[tool.setuptools.package-data]
+"motif.tddfa_v3" = ["assets/*.mat", "LICENSE"]
