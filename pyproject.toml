@@ -25,6 +25,9 @@ dependencies = [
     "huggingface_hub>=0.30",
 ]
 
+[project.optional-dependencies]
+demo = ["yt-dlp"]
+
 [project.scripts]
 motif = "motif.cli:main"
 

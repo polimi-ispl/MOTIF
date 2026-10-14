@@ -11,6 +11,10 @@ from motif.tddfa_v3.face_box.retinaface.prior_box import priorbox
 from motif.tddfa_v3.util.preprocess import load_lm3d
 from motif.tddfa_v3.model import networks
 
+# Alignment currently resizes the full frame before taking a 224 px crop.
+# Bound that intermediate so bad landmarks cannot request unbounded GPU memory.
+MAX_ALIGNMENT_DIMENSION = 4096
+
 
 def _load_retinaface_state_dict(path):
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
@@ -565,7 +569,14 @@ class CoeffExtractor:
         return translation, scale
 
 
-    def batch_resize_n_crop_gpu(self, images, translation_params, scale_factors, output_size=224):
+    def batch_resize_n_crop_gpu(
+        self,
+        images,
+        translation_params,
+        scale_factors,
+        frame_valid=None,
+        output_size=224,
+    ):
         """
         Batch GPU implementation of face alignment: resize and crop faces to standard size.
         
@@ -577,18 +588,55 @@ class CoeffExtractor:
             device: torch.device - computation device
             
         Returns:
-            aligned_faces: torch.Tensor [batch_size, C, output_size, output_size] - aligned face crops
+            aligned_faces: torch.Tensor [batch_size, C, output_size, output_size]
+            geometry_valid: torch.BoolTensor [batch_size]
         """
         batch_size, num_channels, image_height, image_width = images.shape
-        scaled_widths = (image_width * scale_factors).type(torch.int32)
-        scaled_heights = (image_height * scale_factors).type(torch.int32)
+        finite = torch.isfinite(scale_factors) & torch.isfinite(
+            translation_params
+        ).all(dim=1)
+        positive = scale_factors > 0
+        safe_geometry = finite & positive
+        safe_scales = torch.where(
+            safe_geometry, scale_factors, torch.ones_like(scale_factors)
+        )
+        safe_translations = torch.where(
+            safe_geometry[:, None],
+            translation_params,
+            translation_params.new_tensor([image_width / 2, image_height / 2]),
+        )
+
+        scaled_widths = (image_width * safe_scales).type(torch.int32)
+        scaled_heights = (image_height * safe_scales).type(torch.int32)
 
         # Calculate crop coordinates
         # Center crop adjusted by translation parameters
-        left_crop = ((scaled_widths - output_size) / 2 + (translation_params[:, 0] - image_width / 2) * scale_factors).type(torch.int32)
-        top_crop = ((scaled_heights - output_size) / 2 + (image_height / 2 - translation_params[:, 1]) * scale_factors).type(torch.int32)
+        left_crop = (
+            (scaled_widths - output_size) / 2
+            + (safe_translations[:, 0] - image_width / 2) * safe_scales
+        ).type(torch.int32)
+        top_crop = (
+            (scaled_heights - output_size) / 2
+            + (image_height / 2 - safe_translations[:, 1]) * safe_scales
+        ).type(torch.int32)
         right_crop = left_crop + output_size
-        bottom_crop = top_crop + output_size    
+        bottom_crop = top_crop + output_size
+
+        geometry_valid = (
+            safe_geometry
+            & (scaled_widths > 0)
+            & (scaled_heights > 0)
+            & (scaled_widths <= MAX_ALIGNMENT_DIMENSION)
+            & (scaled_heights <= MAX_ALIGNMENT_DIMENSION)
+            & (left_crop < scaled_widths)
+            & (right_crop > 0)
+            & (top_crop < scaled_heights)
+            & (bottom_crop > 0)
+        )
+        if frame_valid is not None:
+            geometry_valid &= frame_valid.to(
+                device=geometry_valid.device, dtype=torch.bool
+            )
 
         # Calculate padding for all images in parallel
         pad_left = torch.clamp(-left_crop, min=0)
@@ -609,20 +657,23 @@ class CoeffExtractor:
         aligned_face_crops = []
         
         for batch_idx in range(batch_size):
+            if not geometry_valid[batch_idx].item():
+                aligned_face_crops.append(
+                    images_float.new_zeros(num_channels, output_size, output_size)
+                )
+                continue
+
             # Resize the image 
             face_image = images_float[batch_idx]  # [C, H, W]
-            try:
-                face_image_resized = F.interpolate(
-                    face_image.unsqueeze(0),  # Add batch dimension: [1, C, H, W]
-                    size=(scaled_heights[batch_idx].item(), scaled_widths[batch_idx].item()),              # New size after scaling
-                    mode='bilinear',
-                    align_corners=False
-                ).squeeze(0)  # Remove batch dimension: [C, H, W]
-            except Exception as e:
-                print(f"Error in interpolation for batch index {batch_idx}: {e}")
-                # Create a dummy crop in case of error
-                aligned_face_crops.append(torch.zeros(num_channels, output_size, output_size, device=self.device))
-                continue
+            face_image_resized = F.interpolate(
+                face_image.unsqueeze(0),  # Add batch dimension: [1, C, H, W]
+                size=(
+                    scaled_heights[batch_idx].item(),
+                    scaled_widths[batch_idx].item(),
+                ),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)  # Remove batch dimension: [C, H, W]
 
             # Crop the face region using precomputed coordinates
             face_region = face_image_resized[:, 
@@ -642,7 +693,7 @@ class CoeffExtractor:
         # Stack all aligned faces into a batch tensor
         aligned_faces = torch.stack(aligned_face_crops, dim=0)  # [batch_size, C, output_size, output_size]
         
-        return aligned_faces
+        return aligned_faces, geometry_valid
 
     def extract_aligned_faces(self, original_batch, transformed_batch, pads, original_height, original_width):
         """Extract aligned faces from batch of images"""
@@ -700,13 +751,14 @@ class CoeffExtractor:
         scale_factors = 102. / scale_factors_raw  # [B] - This is your final scale
 
         # Now align the faces
-        aligned_faces = self.batch_resize_n_crop_gpu(
+        aligned_faces, alignment_valid = self.batch_resize_n_crop_gpu(
             images=original_batch,  # Original video frames
             translation_params=translation_params,
             scale_factors=scale_factors,
+            frame_valid=frame_valid,
         )
 
-        return aligned_faces, final_landmarks, frame_valid
+        return aligned_faces, final_landmarks, frame_valid & alignment_valid
 
     ALPHA_SLICES = {
         "id": (0, 80), "exp": (80, 144), "alb": (144, 224),

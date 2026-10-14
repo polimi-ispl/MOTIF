@@ -64,6 +64,28 @@ print(result["score"])
 
 The score is not a probability and does not define a universal real/fake threshold. Calibrate an operating threshold on separate validation data representative of the intended use.
 
+## Try the DiCaprio demo
+
+```bash
+git clone https://github.com/polimi-ispl/MOTIF.git
+cd MOTIF
+python -m pip install -e '.[demo]'
+cd demo
+./download.sh && ./prepare_clips.sh && python quickstart.py
+```
+
+Downloads may need browser cookies; the default is Firefox. Use
+`COOKIES_FROM_BROWSER=chrome ./download.sh` to select Chrome. The demo also
+needs the FFmpeg executable with libx264. [Demo details](demo/README.md).
+
+It enrolls eight genuine reference clips, scores three independent genuine
+clips and four deepfakes, and saves all global, mouth and fused scores plus AUC
+and ranking margin in `demo/results/scores.json`.
+
+**Recorded demo at the default batch size of 8: AUC 1.000; genuine/fake margin
++3.273773.** Every genuine query ranked above every fake query. This
+seven-query demonstration is not a generalization benchmark.
+
 ## Weights and licenses
 
 | Required file | Source |
@@ -76,7 +98,7 @@ The score is not a probability and does not define a universal real/fake thresho
 | `large_base_net.pth` | HRN via the 3DDFA-V3 Hub repository |
 | `net_recon.pth` | 3DDFA-V3 via the 3DDFA-V3 Hub repository |
 
-Only load trusted checkpoints and reference sets. MOTIF code is [MIT licensed](LICENSE); vendored 3DDFA-V3 code retains its own notice. Third-party model assets retain their respective terms.
+Only load trusted checkpoints and reference sets. MOTIF code is [MIT licensed](LICENSE); vendored 3DDFA-V3 code retains its own notice. Third-party model assets and DiCaprio demo footage retain their respective terms; MIT does not grant redistribution rights for that footage.
 
 ## Acknowledgements
 

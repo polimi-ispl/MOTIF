@@ -9,3 +9,9 @@ dist/
 *.pth
 *.pt
 *.npz
+tests/
+
+# Demo material is fetched from its original sources and generated locally.
+demo/downloads/
+demo/clips/
+demo/results/
